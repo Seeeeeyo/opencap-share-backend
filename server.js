@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const compression = require('compression');
+const fs = require('fs').promises;
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -14,34 +16,68 @@ app.use(compression());
 // Parse JSON bodies
 app.use(express.json({ limit: '50mb' }));
 
-// In-memory storage (for simplicity - in production you'd use a database)
-const shareStorage = new Map();
-
-// Auto-cleanup old shares (keep for 7 days)
-const CLEANUP_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+// File-based storage configuration
+const STORAGE_FILE = path.join(__dirname, 'shares.json');
 const MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-setInterval(() => {
+// Load shares from file on startup
+let shareStorage = new Map();
+
+async function loadShares() {
+  try {
+    const data = await fs.readFile(STORAGE_FILE, 'utf8');
+    const shares = JSON.parse(data);
+    shareStorage = new Map(Object.entries(shares));
+    console.log(`Loaded ${shareStorage.size} shares from storage`);
+  } catch (error) {
+    console.log('No existing shares file found, starting fresh');
+  }
+}
+
+async function saveShares() {
+  try {
+    const sharesObj = Object.fromEntries(shareStorage);
+    await fs.writeFile(STORAGE_FILE, JSON.stringify(sharesObj, null, 2));
+  } catch (error) {
+    console.error('Error saving shares:', error);
+  }
+}
+
+// Auto-cleanup old shares and save periodically
+const CLEANUP_INTERVAL = 60 * 60 * 1000; // 1 hour
+
+setInterval(async () => {
   const now = Date.now();
+  let cleaned = 0;
+  
   for (const [shareId, data] of shareStorage.entries()) {
     if (now - data.timestamp > MAX_AGE) {
       shareStorage.delete(shareId);
-      console.log(`Cleaned up expired share: ${shareId}`);
+      cleaned++;
     }
   }
+  
+  if (cleaned > 0) {
+    console.log(`Cleaned up ${cleaned} expired shares`);
+    await saveShares();
+  }
 }, CLEANUP_INTERVAL);
+
+// Initialize storage
+loadShares();
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    activeShares: shareStorage.size
+    activeShares: shareStorage.size,
+    storage: 'file-based'
   });
 });
 
 // Store share data
-app.post('/api/share', (req, res) => {
+app.post('/api/share', async (req, res) => {
   try {
     const { shareId, data } = req.body;
     
@@ -54,6 +90,9 @@ app.post('/api/share', (req, res) => {
       data: data,
       timestamp: Date.now()
     });
+    
+    // Save to file
+    await saveShares();
     
     console.log(`Stored share: ${shareId}`);
     
@@ -84,6 +123,7 @@ app.get('/api/share/:shareId', (req, res) => {
     const now = Date.now();
     if (now - storedData.timestamp > MAX_AGE) {
       shareStorage.delete(shareId);
+      saveShares(); // Clean up expired share
       return res.status(404).json({ error: 'Share expired' });
     }
     
@@ -117,4 +157,5 @@ app.get('/api/shares', (req, res) => {
 app.listen(PORT, () => {
   console.log(`OpenCap Share Backend running on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+  console.log(`Using file-based storage: ${STORAGE_FILE}`);
 }); 
