@@ -2,9 +2,14 @@ services:
   - type: web
     name: opencap-share-backend
     env: node
+    plan: free # Ensure you're on the free plan
     buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: SUPABASE_URL # Add your Supabase URL in the Render dashboard
+        sync: false
+      - key: SUPABASE_ANON_KEY # Add your Supabase anon key in the Render dashboard
+        sync: false
     healthCheckPath: /health 
